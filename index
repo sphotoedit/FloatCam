@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FloatCam</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: #e8e8e8;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 0;
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+/* ── Camera bubble ── */
+.cam-bubble {
+  position: relative;
+  width: 280px;
+  height: 280px;
+  background: #1c1c1e;
+  overflow: hidden;
+  box-shadow: 0 14px 55px rgba(0,0,0,0.28), 0 2px 10px rgba(0,0,0,0.1);
+  border-radius: 32px;
+  transition:
+    border-radius 0.36s cubic-bezier(0.4,0,0.2,1),
+    width         0.36s cubic-bezier(0.4,0,0.2,1),
+    height        0.36s cubic-bezier(0.4,0,0.2,1);
+}
+.cam-bubble.shape-rounded   { border-radius: 32px; width: 280px; height: 280px; }
+.cam-bubble.shape-circle    { border-radius: 50%;  width: 280px; height: 280px; }
+.cam-bubble.shape-portrait  { border-radius: 24px; width: 196px; height: 280px; }
+.cam-bubble.shape-landscape { border-radius: 20px; width: 340px; height: 196px; }
+
+/* Hidden real video — used only as source */
+#camVideo {
+  position: absolute;
+  width: 1px; height: 1px;
+  opacity: 0; pointer-events: none;
+}
+
+/* Visible shaped canvas */
+#camCanvas {
+  width: 100%; height: 100%;
+  display: block;
+}
+
+/* Hidden PiP canvas (always square source, shape drawn on it) */
+#pipCanvas { display: none; }
+
+/* placeholder */
+#placeholder {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 10px;
+  color: rgba(255,255,255,0.28);
+  font-size: 12px; font-weight: 500;
+  pointer-events: none;
+}
+#placeholder svg { width: 38px; height: 38px; opacity: 0.35; }
+
+/* ── PiP button — top right ── */
+.pip-btn {
+  position: absolute; top: 9px; right: 9px;
+  width: 30px; height: 30px;
+  background: rgba(0,0,0,0.52);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  border: none; border-radius: 8px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 10;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.2s, background 0.15s, transform 0.1s;
+  color: #fff;
+}
+.pip-btn.show      { opacity: 1; pointer-events: all; }
+.pip-btn:hover     { background: rgba(0,0,0,0.78); transform: scale(1.07); }
+.pip-btn:active    { transform: scale(0.94); }
+.pip-btn.active-pip{ background: rgba(231,0,11,0.75); }
+.pip-btn svg       { width: 15px; height: 15px; }
+
+/* ── Bottom controls ── */
+.bottom-bar {
+  display: flex; flex-direction: column;
+  align-items: center; gap: 10px;
+}
+
+.start-btn {
+  border: none; background: #fff;
+  border-radius: 100px; padding: 10px 28px;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px; font-weight: 600; color: #111;
+  cursor: pointer; display: flex; align-items: center; gap: 8px;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.1);
+  transition: background 0.14s, color 0.14s;
+}
+.start-btn:hover { background: #f0f0f0; }
+.start-btn.on    { background: #111; color: #fff; }
+.start-btn.on:hover { background: #2a2a2a; }
+
+.btn-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: #bbb; flex-shrink: 0;
+  transition: background 0.2s;
+}
+.start-btn.on .btn-dot {
+  background: #ff3b30;
+  animation: blinkDot 1.1s ease-in-out infinite;
+}
+@keyframes blinkDot { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+.shape-strip {
+  display: flex; align-items: center; gap: 4px;
+  background: rgba(0,0,0,0.09);
+  border-radius: 100px; padding: 5px 8px;
+}
+.shp {
+  width: 36px; height: 36px;
+  border: none; background: transparent;
+  border-radius: 9px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  color: #888; transition: background 0.13s, color 0.13s;
+}
+.shp:hover { background: rgba(0,0,0,0.07); color: #333; }
+.shp.active {
+  background: #fff; color: #111;
+  box-shadow: 0 1px 5px rgba(0,0,0,0.14);
+}
+.shp svg { width: 19px; height: 19px; }
+
+.extras { display: flex; align-items: center; gap: 7px; }
+.xbtn {
+  border: none; border-radius: 8px;
+  background: rgba(0,0,0,0.07);
+  padding: 6px 12px;
+  font-family: 'Inter', sans-serif;
+  font-size: 11px; font-weight: 500; color: #555;
+  cursor: pointer; display: flex; align-items: center; gap: 5px;
+  transition: background 0.12s, color 0.12s;
+}
+.xbtn:hover { background: rgba(0,0,0,0.12); color: #111; }
+.xbtn.active { background: #111; color: #fff; }
+.xbtn svg { width: 12px; height: 12px; }
+
+.cam-wrap { position: relative; }
+select {
+  appearance: none; border: none; outline: none;
+  background: rgba(0,0,0,0.07); border-radius: 8px;
+  padding: 6px 26px 6px 10px;
+  font-family: 'Inter', sans-serif;
+  font-size: 11px; font-weight: 500; color: #444;
+  cursor: pointer; max-width: 160px;
+}
+.sarrow {
+  position: absolute; right: 8px; top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none; color: #888;
+}
+
+/* Safari notice */
+.safari-note {
+  display: none;
+  background: rgba(255,149,0,0.12);
+  border: 1px solid rgba(255,149,0,0.35);
+  border-radius: 10px;
+  padding: 9px 14px;
+  font-size: 11px; color: #7a4800;
+  max-width: 300px; text-align: center; line-height: 1.5;
+}
+.safari-note.show { display: block; }
+
+/* toast */
+.toast {
+  position: fixed; bottom: 26px; left: 50%;
+  transform: translateX(-50%) translateY(14px);
+  background: rgba(10,10,10,0.87);
+  color: #fff; font-size: 12px; font-weight: 500;
+  padding: 9px 18px; border-radius: 100px;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.22s, transform 0.22s;
+  white-space: nowrap; z-index: 9999;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <div class="cam-bubble shape-rounded" id="bubble">
+    <!-- Real video (hidden, source only) -->
+    <video id="camVideo" autoplay playsinline muted webkit-playsinline></video>
+    <!-- Shaped canvas shown in UI -->
+    <canvas id="camCanvas"></canvas>
+    <!-- PiP source canvas (hidden) -->
+    <canvas id="pipCanvas" width="560" height="560"></canvas>
+
+    <div id="placeholder">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M23 7l-7 5 7 5V7z"/>
+        <rect x="1" y="5" width="15" height="14" rx="2"/>
+      </svg>
+      <span>Start Camera</span>
+    </div>
+
+    <button class="pip-btn" id="pipBtn" onclick="togglePiP()" title="Float as Picture-in-Picture (P)">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="3.5" width="16" height="10" rx="2.5"/>
+        <rect x="10.5" y="9" width="7" height="4.5" rx="1.5" fill="currentColor" stroke="none"/>
+      </svg>
+    </button>
+  </div>
+
+  <div class="bottom-bar">
+    <button class="start-btn" id="startBtn" onclick="toggleCam()">
+      <div class="btn-dot"></div>
+      <span id="btnLbl">Start Camera</span>
+    </button>
+
+    <div class="shape-strip">
+      <button class="shp active" data-shape="rounded" onclick="setShape(this)" title="Square">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <rect x="3" y="3" width="14" height="14" rx="4.5"/>
+        </svg>
+      </button>
+      <button class="shp" data-shape="portrait" onclick="setShape(this)" title="Portrait">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <rect x="5.5" y="2" width="9" height="16" rx="3.5"/>
+        </svg>
+      </button>
+      <button class="shp" data-shape="landscape" onclick="setShape(this)" title="Landscape">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <rect x="2" y="5.5" width="16" height="9" rx="3.5"/>
+        </svg>
+      </button>
+      <button class="shp" data-shape="circle" onclick="setShape(this)" title="Circle">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8">
+          <circle cx="10" cy="10" r="7"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="extras">
+      <button class="xbtn active" id="mirBtn" onclick="toggleMirror()">
+        <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+          <path d="M7 1v12M2 4.5L.5 7 2 9.5M12 4.5L13.5 7 12 9.5"/>
+        </svg>
+        Mirror
+      </button>
+      <div class="cam-wrap">
+        <select id="camSel" onchange="switchCam()"><option>Loading…</option></select>
+        <div class="sarrow">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+            <path d="M2 3.5l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+
+    <div class="safari-note" id="safariNote">
+      Safari detected — camera works but PiP uses a floating window instead of native PiP. Enable camera in <strong>Safari → Settings → Websites → Camera</strong>.
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ─── state ─── */
+let stream    = null;
+let mirrored  = true;
+let shape     = 'rounded';
+let rafId     = null;
+let pipVideo  = null; // the <video> we feed into PiP (from pipCanvas stream)
+let pipActive = false;
+
+const bubble     = document.getElementById('bubble');
+const camVideo   = document.getElementById('camVideo');
+const camCanvas  = document.getElementById('camCanvas');
+const pipCanvas  = document.getElementById('pipCanvas');
+const ph         = document.getElementById('placeholder');
+const startBtn   = document.getElementById('startBtn');
+const btnLbl     = document.getElementById('btnLbl');
+const pipBtn     = document.getElementById('pipBtn');
+const mirBtn     = document.getElementById('mirBtn');
+const camSel     = document.getElementById('camSel');
+const safariNote = document.getElementById('safariNote');
+
+/* ─── detect Safari ─── */
+const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+if (isSafari) safariNote.classList.add('show');
+
+/* ─── load cameras ─── */
+async function loadCams() {
+  try {
+    /* ask permission first so labels are available */
+    const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    tmp.getTracks().forEach(t => t.stop());
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    const cams = devs.filter(d => d.kind === 'videoinput');
+    camSel.innerHTML = cams.length
+      ? cams.map((c, i) => `<option value="${c.deviceId}">${c.label || 'Camera ' + (i + 1)}</option>`).join('')
+      : '<option value="">No cameras found</option>';
+  } catch (e) {
+    camSel.innerHTML = '<option value="">No camera access</option>';
+    toast('Allow camera access in browser settings');
+  }
+}
+loadCams();
+
+/* ─── start / stop ─── */
+async function toggleCam() {
+  if (stream) { stopCam(); return; }
+  try {
+    const opts = {
+      video: {
+        width: { ideal: 1280 }, height: { ideal: 720 },
+        facingMode: 'user',
+        ...(camSel.value ? { deviceId: { exact: camSel.value } } : {})
+      },
+      audio: false
+    };
+    stream = await navigator.mediaDevices.getUserMedia(opts);
+    camVideo.srcObject = stream;
+    await camVideo.play();
+    ph.style.display = 'none';
+    startBtn.classList.add('on');
+    btnLbl.textContent = 'Stop Camera';
+    pipBtn.classList.add('show');
+    startDrawLoop();
+    toast('Camera on ✓');
+  } catch (e) {
+    console.error(e);
+    if (e.name === 'NotAllowedError') {
+      toast('Camera access denied — check browser settings');
+      if (isSafari) toast('Safari: Settings → Websites → Camera → Allow');
+    } else if (e.name === 'NotFoundError') {
+      toast('No camera found');
+    } else {
+      toast('Could not start camera: ' + e.message);
+    }
+  }
+}
+
+function stopCam() {
+  cancelAnimationFrame(rafId); rafId = null;
+  stream?.getTracks().forEach(t => t.stop());
+  stream = null;
+  camVideo.srcObject = null;
+  clearCanvas(camCanvas);
+  clearCanvas(pipCanvas);
+  ph.style.display = 'flex';
+  startBtn.classList.remove('on');
+  btnLbl.textContent = 'Start Camera';
+  pipBtn.classList.remove('show', 'active-pip');
+  pipActive = false;
+  if (pipVideo) { try { document.exitPictureInPicture(); } catch {} }
+  toast('Camera off');
+}
+
+async function switchCam() {
+  if (!stream) return;
+  stream.getTracks().forEach(t => t.stop());
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { deviceId: { exact: camSel.value }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false
+    });
+    camVideo.srcObject = stream;
+    await camVideo.play();
+    toast('Camera switched');
+  } catch (e) { toast('Switch failed'); }
+}
+
+/* ─── draw loop — renders shaped frame to both canvases ─── */
+function startDrawLoop() {
+  const ctx  = camCanvas.getContext('2d');
+  const pctx = pipCanvas.getContext('2d');
+
+  function frame() {
+    if (!stream) return;
+    rafId = requestAnimationFrame(frame);
+
+    /* sync canvas sizes to bubble's CSS size */
+    const bw = bubble.clientWidth;
+    const bh = bubble.clientHeight;
+    if (camCanvas.width !== bw || camCanvas.height !== bh) {
+      camCanvas.width  = bw;
+      camCanvas.height = bh;
+    }
+
+    /* PiP canvas — always square 560px, shape clipped inside */
+    const PS = 560;
+    pipCanvas.width = pipCanvas.height = PS;
+
+    drawShapedFrame(ctx,  bw, bh,  shape, mirrored);
+    drawShapedFrame(pctx, PS, PS,  shape, mirrored, true);
+  }
+  frame();
+}
+
+/**
+ * Draw the camera frame into a canvas with the chosen shape mask.
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {number} w canvas width
+ * @param {number} h canvas height
+ * @param {string} shp  shape key
+ * @param {boolean} mir mirror
+ * @param {boolean} pip  if true, draw transparent outside shape (for PiP)
+ */
+function drawShapedFrame(ctx, w, h, shp, mir, pip = false) {
+  ctx.clearRect(0, 0, w, h);
+
+  /* clip path for shape */
+  ctx.save();
+  makeShapePath(ctx, w, h, shp, pip);
+  ctx.clip();
+
+  /* draw mirrored video */
+  if (mir) {
+    ctx.translate(w, 0);
+    ctx.scale(-1, 1);
+  }
+
+  /* letterbox/cover: fit video into canvas */
+  const vw = camVideo.videoWidth  || w;
+  const vh = camVideo.videoHeight || h;
+  const scale = Math.max(w / vw, h / vh);
+  const dw = vw * scale, dh = vh * scale;
+  const dx = (w - dw) / 2, dy = (h - dh) / 2;
+
+  ctx.drawImage(camVideo, dx, dy, dw, dh);
+  ctx.restore();
+}
+
+/* build clip path for each shape */
+function makeShapePath(ctx, w, h, shp, pip) {
+  ctx.beginPath();
+  const r32 = Math.min(32, w * 0.12);
+  const r24 = Math.min(24, w * 0.1);
+
+  if (shp === 'circle') {
+    /* for PiP, circle inscribed in square canvas; for UI bubble, full ellipse */
+    if (pip) {
+      ctx.arc(w / 2, h / 2, Math.min(w, h) / 2 - 4, 0, Math.PI * 2);
+    } else {
+      ctx.ellipse(w / 2, h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+    }
+  } else if (shp === 'portrait') {
+    roundRect(ctx, 0, 0, w, h, r24);
+  } else if (shp === 'landscape') {
+    roundRect(ctx, 0, 0, w, h, r24);
+  } else {
+    /* rounded square default */
+    roundRect(ctx, 0, 0, w, h, r32);
+  }
+  ctx.closePath();
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  if (ctx.roundRect) {
+    ctx.roundRect(x, y, w, h, r);
+  } else {
+    /* Safari polyfill */
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+  }
+}
+
+function clearCanvas(c) {
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+}
+
+/* ─── shape change ─── */
+function setShape(btn) {
+  document.querySelectorAll('.shp').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  shape = btn.dataset.shape;
+  bubble.className = 'cam-bubble shape-' + shape;
+  /* redraw PiP immediately if active */
+  if (pipActive) refreshPiP();
+}
+
+/* ─── mirror ─── */
+function toggleMirror() {
+  mirrored = !mirrored;
+  mirBtn.classList.toggle('active', mirrored);
+}
+
+/* ─── Picture-in-Picture ─── */
+async function togglePiP() {
+  if (!stream) { toast('Start camera first'); return; }
+  if (pipActive) { exitPiP(); return; }
+  await enterPiP();
+}
+
+async function enterPiP() {
+  try {
+    /* Create a hidden <video> that streams from the shaped pipCanvas */
+    if (!pipVideo) {
+      pipVideo = document.createElement('video');
+      pipVideo.muted = true;
+      pipVideo.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;';
+      document.body.appendChild(pipVideo);
+    }
+
+    /* Capture pipCanvas as a video stream */
+    const fps = 30;
+    const canvasStream = pipCanvas.captureStream(fps);
+    pipVideo.srcObject = canvasStream;
+    await pipVideo.play();
+
+    if (document.pictureInPictureEnabled && !isSafari) {
+      await pipVideo.requestPictureInPicture();
+      pipActive = true;
+      pipBtn.classList.add('active-pip');
+      toast('📺 Shaped PiP floating! Drag anywhere');
+
+      pipVideo.addEventListener('leavepictureinpicture', () => {
+        pipActive = false;
+        pipBtn.classList.remove('active-pip');
+        toast('PiP closed');
+      }, { once: true });
+
+    } else if (isSafari && document.pictureInPictureEnabled) {
+      /* Safari 14+ supports PiP on <video> */
+      await pipVideo.requestPictureInPicture();
+      pipActive = true;
+      pipBtn.classList.add('active-pip');
+      toast('📺 Floating on Safari! Drag it anywhere');
+      pipVideo.addEventListener('leavepictureinpicture', () => {
+        pipActive = false;
+        pipBtn.classList.remove('active-pip');
+      }, { once: true });
+
+    } else {
+      /* Fallback: open popup window */
+      openPopupFallback();
+    }
+  } catch (e) {
+    console.error('PiP error:', e);
+    openPopupFallback();
+  }
+}
+
+function exitPiP() {
+  try { document.exitPictureInPicture(); } catch {}
+  pipActive = false;
+  pipBtn.classList.remove('active-pip');
+  toast('PiP closed');
+}
+
+function refreshPiP() {
+  /* Shape changed while PiP is active — pipCanvas draw loop handles it automatically */
+}
+
+/* ─── Popup fallback for browsers without PiP ─── */
+function openPopupFallback() {
+  const size = shape === 'portrait'  ? 'width=220,height=320' :
+               shape === 'landscape' ? 'width=380,height=220' :
+                                       'width=300,height=300';
+  const popup = window.open('', 'floatcam', size + ',alwaysOnTop=1,resizable=1');
+  if (!popup) { toast('Allow popups for floating window'); return; }
+
+  const borderRadius =
+    shape === 'circle'    ? '50%' :
+    shape === 'portrait'  ? '20px' :
+    shape === 'landscape' ? '16px' : '28px';
+
+  popup.document.write(`<!DOCTYPE html><html><head>
+    <style>* { margin:0; padding:0; box-sizing:border-box; }
+    body { background:#000; overflow:hidden; }
+    canvas { width:100%; height:100%; display:block; border-radius:${borderRadius}; }
+    </style></head><body><canvas id="pc"></canvas></body></html>`);
+  popup.document.close();
+
+  let popRaf;
+  function drawPopup() {
+    if (popup.closed) { cancelAnimationFrame(popRaf); return; }
+    popRaf = popup.requestAnimationFrame(drawPopup);
+    const pc = popup.document.getElementById('pc');
+    if (!pc) return;
+    pc.width  = popup.innerWidth;
+    pc.height = popup.innerHeight;
+    const pctx = pc.getContext('2d');
+    drawShapedFrame(pctx, pc.width, pc.height, shape, mirrored);
+  }
+  popup.requestAnimationFrame(drawPopup);
+  toast('📺 Floating popup window opened');
+  pipActive = true;
+  pipBtn.classList.add('active-pip');
+  popup.addEventListener('beforeunload', () => {
+    pipActive = false;
+    pipBtn.classList.remove('active-pip');
+  });
+}
+
+/* ─── toast ─── */
+let tt;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(tt);
+  tt = setTimeout(() => el.classList.remove('show'), 2600);
+}
+
+/* ─── keyboard ─── */
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'SELECT') return;
+  if (e.code === 'Space') { e.preventDefault(); toggleCam(); }
+  if (e.code === 'KeyP')  togglePiP();
+  if (e.code === 'KeyM')  toggleMirror();
+});
+</script>
+</body>
+</html>
