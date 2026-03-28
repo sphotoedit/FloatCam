@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FloatCam</title>
+<title>FloatCam - Document PiP</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -57,9 +57,6 @@ body {
   width: 100%; height: 100%;
   display: block;
 }
-
-/* Hidden PiP canvas (always square source, shape drawn on it) */
-#pipCanvas { display: none; }
 
 /* placeholder */
 #placeholder {
@@ -170,18 +167,6 @@ select {
   pointer-events: none; color: #888;
 }
 
-/* Safari notice */
-.safari-note {
-  display: none;
-  background: rgba(255,149,0,0.12);
-  border: 1px solid rgba(255,149,0,0.35);
-  border-radius: 10px;
-  padding: 9px 14px;
-  font-size: 11px; color: #7a4800;
-  max-width: 300px; text-align: center; line-height: 1.5;
-}
-.safari-note.show { display: block; }
-
 /* toast */
 .toast {
   position: fixed; bottom: 26px; left: 50%;
@@ -199,15 +184,10 @@ select {
 </head>
 <body>
 
-<div class="shell">
-
+<div class="shell" id="shell">
   <div class="cam-bubble shape-rounded" id="bubble">
-    <!-- Real video (hidden, source only) -->
     <video id="camVideo" autoplay playsinline muted webkit-playsinline></video>
-    <!-- Shaped canvas shown in UI -->
     <canvas id="camCanvas"></canvas>
-    <!-- PiP source canvas (hidden) -->
-    <canvas id="pipCanvas" width="560" height="560"></canvas>
 
     <div id="placeholder">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
@@ -270,10 +250,6 @@ select {
         </div>
       </div>
     </div>
-
-    <div class="safari-note" id="safariNote">
-      Safari detected — camera works but PiP uses a floating window instead of native PiP. Enable camera in <strong>Safari → Settings → Websites → Camera</strong>.
-    </div>
   </div>
 </div>
 
@@ -285,29 +261,23 @@ let stream    = null;
 let mirrored  = true;
 let shape     = 'rounded';
 let rafId     = null;
-let pipVideo  = null; // the <video> we feed into PiP (from pipCanvas stream)
+let pipWindow = null; 
 let pipActive = false;
 
 const bubble     = document.getElementById('bubble');
+const shell      = document.getElementById('shell');
 const camVideo   = document.getElementById('camVideo');
 const camCanvas  = document.getElementById('camCanvas');
-const pipCanvas  = document.getElementById('pipCanvas');
 const ph         = document.getElementById('placeholder');
 const startBtn   = document.getElementById('startBtn');
 const btnLbl     = document.getElementById('btnLbl');
 const pipBtn     = document.getElementById('pipBtn');
 const mirBtn     = document.getElementById('mirBtn');
 const camSel     = document.getElementById('camSel');
-const safariNote = document.getElementById('safariNote');
-
-/* ─── detect Safari ─── */
-const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-if (isSafari) safariNote.classList.add('show');
 
 /* ─── load cameras ─── */
 async function loadCams() {
   try {
-    /* ask permission first so labels are available */
     const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     tmp.getTracks().forEach(t => t.stop());
     const devs = await navigator.mediaDevices.enumerateDevices();
@@ -344,15 +314,7 @@ async function toggleCam() {
     startDrawLoop();
     toast('Camera on ✓');
   } catch (e) {
-    console.error(e);
-    if (e.name === 'NotAllowedError') {
-      toast('Camera access denied — check browser settings');
-      if (isSafari) toast('Safari: Settings → Websites → Camera → Allow');
-    } else if (e.name === 'NotFoundError') {
-      toast('No camera found');
-    } else {
-      toast('Could not start camera: ' + e.message);
-    }
+    toast('Could not start camera: ' + e.message);
   }
 }
 
@@ -362,13 +324,11 @@ function stopCam() {
   stream = null;
   camVideo.srcObject = null;
   clearCanvas(camCanvas);
-  clearCanvas(pipCanvas);
   ph.style.display = 'flex';
   startBtn.classList.remove('on');
   btnLbl.textContent = 'Start Camera';
   pipBtn.classList.remove('show', 'active-pip');
-  pipActive = false;
-  if (pipVideo) { try { document.exitPictureInPicture(); } catch {} }
+  if (pipActive) exitPiP();
   toast('Camera off');
 }
 
@@ -386,86 +346,50 @@ async function switchCam() {
   } catch (e) { toast('Switch failed'); }
 }
 
-/* ─── draw loop — renders shaped frame to both canvases ─── */
+/* ─── draw loop ─── */
 function startDrawLoop() {
   const ctx  = camCanvas.getContext('2d');
-  const pctx = pipCanvas.getContext('2d');
-
   function frame() {
     if (!stream) return;
     rafId = requestAnimationFrame(frame);
-
-    /* sync canvas sizes to bubble's CSS size */
     const bw = bubble.clientWidth;
     const bh = bubble.clientHeight;
     if (camCanvas.width !== bw || camCanvas.height !== bh) {
       camCanvas.width  = bw;
       camCanvas.height = bh;
     }
-
-    /* PiP canvas — always square 560px, shape clipped inside */
-    const PS = 560;
-    pipCanvas.width = pipCanvas.height = PS;
-
-    drawShapedFrame(ctx,  bw, bh,  shape, mirrored);
-    drawShapedFrame(pctx, PS, PS,  shape, mirrored, true);
+    drawShapedFrame(ctx, bw, bh, shape, mirrored);
   }
   frame();
 }
 
-/**
- * Draw the camera frame into a canvas with the chosen shape mask.
- * @param {CanvasRenderingContext2D} ctx
- * @param {number} w canvas width
- * @param {number} h canvas height
- * @param {string} shp  shape key
- * @param {boolean} mir mirror
- * @param {boolean} pip  if true, draw transparent outside shape (for PiP)
- */
-function drawShapedFrame(ctx, w, h, shp, mir, pip = false) {
+function drawShapedFrame(ctx, w, h, shp, mir) {
   ctx.clearRect(0, 0, w, h);
-
-  /* clip path for shape */
   ctx.save();
-  makeShapePath(ctx, w, h, shp, pip);
+  makeShapePath(ctx, w, h, shp);
   ctx.clip();
-
-  /* draw mirrored video */
   if (mir) {
     ctx.translate(w, 0);
     ctx.scale(-1, 1);
   }
-
-  /* letterbox/cover: fit video into canvas */
   const vw = camVideo.videoWidth  || w;
   const vh = camVideo.videoHeight || h;
   const scale = Math.max(w / vw, h / vh);
   const dw = vw * scale, dh = vh * scale;
   const dx = (w - dw) / 2, dy = (h - dh) / 2;
-
   ctx.drawImage(camVideo, dx, dy, dw, dh);
   ctx.restore();
 }
 
-/* build clip path for each shape */
-function makeShapePath(ctx, w, h, shp, pip) {
+function makeShapePath(ctx, w, h, shp) {
   ctx.beginPath();
   const r32 = Math.min(32, w * 0.12);
   const r24 = Math.min(24, w * 0.1);
-
   if (shp === 'circle') {
-    /* for PiP, circle inscribed in square canvas; for UI bubble, full ellipse */
-    if (pip) {
-      ctx.arc(w / 2, h / 2, Math.min(w, h) / 2 - 4, 0, Math.PI * 2);
-    } else {
-      ctx.ellipse(w / 2, h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
-    }
-  } else if (shp === 'portrait') {
-    roundRect(ctx, 0, 0, w, h, r24);
-  } else if (shp === 'landscape') {
+    ctx.ellipse(w / 2, h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+  } else if (shp === 'portrait' || shp === 'landscape') {
     roundRect(ctx, 0, 0, w, h, r24);
   } else {
-    /* rounded square default */
     roundRect(ctx, 0, 0, w, h, r32);
   }
   ctx.closePath();
@@ -475,15 +399,10 @@ function roundRect(ctx, x, y, w, h, r) {
   if (ctx.roundRect) {
     ctx.roundRect(x, y, w, h, r);
   } else {
-    /* Safari polyfill */
-    ctx.moveTo(x + r, y);
-    ctx.lineTo(x + w - r, y);
-    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-    ctx.lineTo(x + w, y + h - r);
-    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-    ctx.lineTo(x + r, y + h);
-    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-    ctx.lineTo(x, y + r);
+    ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r); ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h); ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r); ctx.lineTo(x, y + r);
     ctx.quadraticCurveTo(x, y, x + r, y);
   }
 }
@@ -499,8 +418,13 @@ function setShape(btn) {
   btn.classList.add('active');
   shape = btn.dataset.shape;
   bubble.className = 'cam-bubble shape-' + shape;
-  /* redraw PiP immediately if active */
-  if (pipActive) refreshPiP();
+  
+  // Resize the PiP window automatically if it's open
+  if (pipWindow) {
+    const w = shape === 'landscape' ? 340 : shape === 'portrait' ? 196 : 280;
+    const h = shape === 'landscape' ? 196 : shape === 'portrait' ? 280 : 280;
+    pipWindow.resizeTo(w, h + 30); // +30 accounts for OS title bars slightly
+  }
 }
 
 /* ─── mirror ─── */
@@ -509,7 +433,7 @@ function toggleMirror() {
   mirBtn.classList.toggle('active', mirrored);
 }
 
-/* ─── Picture-in-Picture ─── */
+/* ─── Document Picture-in-Picture ─── */
 async function togglePiP() {
   if (!stream) { toast('Start camera first'); return; }
   if (pipActive) { exitPiP(); return; }
@@ -517,104 +441,67 @@ async function togglePiP() {
 }
 
 async function enterPiP() {
+  if (!('documentPictureInPicture' in window)) {
+    toast('Requires Chrome or Edge for Advanced PiP');
+    return;
+  }
+
   try {
-    /* Create a hidden <video> that streams from the shaped pipCanvas */
-    if (!pipVideo) {
-      pipVideo = document.createElement('video');
-      pipVideo.muted = true;
-      pipVideo.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;';
-      document.body.appendChild(pipVideo);
-    }
+    const w = shape === 'landscape' ? 340 : shape === 'portrait' ? 196 : 280;
+    const h = shape === 'landscape' ? 196 : shape === 'portrait' ? 280 : 280;
 
-    /* Capture pipCanvas as a video stream */
-    const fps = 30;
-    const canvasStream = pipCanvas.captureStream(fps);
-    pipVideo.srcObject = canvasStream;
-    await pipVideo.play();
+    pipWindow = await window.documentPictureInPicture.requestWindow({
+      width: w,
+      height: h
+    });
 
-    if (document.pictureInPictureEnabled && !isSafari) {
-      await pipVideo.requestPictureInPicture();
-      pipActive = true;
-      pipBtn.classList.add('active-pip');
-      toast('📺 Shaped PiP floating! Drag anywhere');
+    // Copy all CSS styles to the new window
+    [...document.styleSheets].forEach((styleSheet) => {
+      try {
+        const cssRules = [...styleSheet.cssRules].map((rule) => rule.cssText).join('');
+        const style = document.createElement('style');
+        style.textContent = cssRules;
+        pipWindow.document.head.appendChild(style);
+      } catch (e) {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = styleSheet.href;
+        pipWindow.document.head.appendChild(link);
+      }
+    });
 
-      pipVideo.addEventListener('leavepictureinpicture', () => {
-        pipActive = false;
-        pipBtn.classList.remove('active-pip');
-        toast('PiP closed');
-      }, { once: true });
+    // Style the PiP window body to be a clean dark container
+    pipWindow.document.body.style.margin = '0';
+    pipWindow.document.body.style.display = 'flex';
+    pipWindow.document.body.style.justifyContent = 'center';
+    pipWindow.document.body.style.alignItems = 'center';
+    pipWindow.document.body.style.background = '#0a0a0a'; 
+    pipWindow.document.body.style.height = '100vh';
 
-    } else if (isSafari && document.pictureInPictureEnabled) {
-      /* Safari 14+ supports PiP on <video> */
-      await pipVideo.requestPictureInPicture();
-      pipActive = true;
-      pipBtn.classList.add('active-pip');
-      toast('📺 Floating on Safari! Drag it anywhere');
-      pipVideo.addEventListener('leavepictureinpicture', () => {
-        pipActive = false;
-        pipBtn.classList.remove('active-pip');
-      }, { once: true });
+    // Physically move the camera bubble into the new window!
+    pipWindow.document.body.appendChild(bubble);
+    
+    pipActive = true;
+    pipBtn.classList.add('active-pip');
+    toast('Floating on top! 📺');
 
-    } else {
-      /* Fallback: open popup window */
-      openPopupFallback();
-    }
-  } catch (e) {
-    console.error('PiP error:', e);
-    openPopupFallback();
+    // Handle when the user closes the PiP window via the OS 'X' button
+    pipWindow.addEventListener('pagehide', () => {
+      shell.insertBefore(bubble, shell.firstChild); // Put the bubble back in the main page
+      pipActive = false;
+      pipBtn.classList.remove('active-pip');
+      pipWindow = null;
+      toast('PiP closed');
+    });
+
+  } catch (err) {
+    console.error(err);
+    toast('Failed to open PiP: ' + err.message);
   }
 }
 
 function exitPiP() {
-  try { document.exitPictureInPicture(); } catch {}
-  pipActive = false;
-  pipBtn.classList.remove('active-pip');
-  toast('PiP closed');
-}
-
-function refreshPiP() {
-  /* Shape changed while PiP is active — pipCanvas draw loop handles it automatically */
-}
-
-/* ─── Popup fallback for browsers without PiP ─── */
-function openPopupFallback() {
-  const size = shape === 'portrait'  ? 'width=220,height=320' :
-               shape === 'landscape' ? 'width=380,height=220' :
-                                       'width=300,height=300';
-  const popup = window.open('', 'floatcam', size + ',alwaysOnTop=1,resizable=1');
-  if (!popup) { toast('Allow popups for floating window'); return; }
-
-  const borderRadius =
-    shape === 'circle'    ? '50%' :
-    shape === 'portrait'  ? '20px' :
-    shape === 'landscape' ? '16px' : '28px';
-
-  popup.document.write(`<!DOCTYPE html><html><head>
-    <style>* { margin:0; padding:0; box-sizing:border-box; }
-    body { background:#000; overflow:hidden; }
-    canvas { width:100%; height:100%; display:block; border-radius:${borderRadius}; }
-    </style></head><body><canvas id="pc"></canvas></body></html>`);
-  popup.document.close();
-
-  let popRaf;
-  function drawPopup() {
-    if (popup.closed) { cancelAnimationFrame(popRaf); return; }
-    popRaf = popup.requestAnimationFrame(drawPopup);
-    const pc = popup.document.getElementById('pc');
-    if (!pc) return;
-    pc.width  = popup.innerWidth;
-    pc.height = popup.innerHeight;
-    const pctx = pc.getContext('2d');
-    drawShapedFrame(pctx, pc.width, pc.height, shape, mirrored);
-  }
-  popup.requestAnimationFrame(drawPopup);
-  toast('📺 Floating popup window opened');
-  pipActive = true;
-  pipBtn.classList.add('active-pip');
-  popup.addEventListener('beforeunload', () => {
-    pipActive = false;
-    pipBtn.classList.remove('active-pip');
-  });
+  if (pipWindow) pipWindow.close();
 }
 
 /* ─── toast ─── */
